@@ -17,6 +17,7 @@ bot.
 
 import interface as I
 from credentials import bot_token
+from persistence import MyPersistence
 import logging
 
 from telegram import ForceReply, Update
@@ -34,10 +35,7 @@ logger = logging.getLogger(__name__)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     '''Send a message when the command /start is issued.'''
     user = update.effective_user
-    context.user_data['private'] = update.effective_message.chat_id
     context.user_data['user'] = update.effective_user
-    context.user_data['mention'] = update.effective_user.mention_html()
-    context.user_data['name'] = update.effective_user.full_name
     await update.message.reply_html(rf'你好 {user.mention_html()}，您已成功注册。')
 
 async def start_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -97,7 +95,7 @@ group_chat_commands = {
     'quit': I.quit,
     'startgame': I.startgame,
     'finish': I.finish_vote,
-    'stop': I.game_over_correct_force
+    'stop': I.game_over_incorrect_force
 }
 
 private_chat_commands = {
@@ -107,7 +105,8 @@ private_chat_commands = {
 def main() -> None:
     '''Start the bot.'''
     # Create the Application and pass it your bot's token.
-    application = Application.builder().token(bot_token).build()
+    my_persistence = MyPersistence('data.txt')
+    application = Application.builder().token(bot_token).persistence(persistence=my_persistence).build()
 
     # on different commands - answer in Telegram
     application.add_handler(CommandHandler(list(private_chat_commands.keys()), I.not_in_private_chat_alart, filters=~filters.ChatType.PRIVATE))
@@ -122,6 +121,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(I.host_select, '-'))
     application.add_handler(CallbackQueryHandler(I.host_answer, '[0-4]'))
     application.add_handler(CallbackQueryHandler(I.game_over_correct, '\+'))
+    application.add_handler(CallbackQueryHandler(I.game_over_incorrect_force, '@'))
     application.add_handler(CallbackQueryHandler(I.vote, '!'))
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, I.update_question))
     application.add_handler(MessageHandler(~filters.ChatType.GROUPS, I.not_in_group_chat_alart))
