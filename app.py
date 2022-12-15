@@ -36,6 +36,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     context.user_data['private'] = update.effective_message.chat_id
     context.user_data['user'] = update.effective_user
+    context.user_data['mention'] = update.effective_user.mention_html()
+    context.user_data['name'] = update.effective_user.full_name
     await update.message.reply_html(rf'你好 {user.mention_html()}，您已成功注册。')
 
 async def start_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -94,6 +96,8 @@ group_chat_commands = {
     'join': I.join,
     'quit': I.quit,
     'startgame': I.startgame,
+    'finish': I.finish_vote,
+    'stop': I.game_over_correct_force
 }
 
 private_chat_commands = {
@@ -115,7 +119,12 @@ def main() -> None:
     application.add_handler(CommandHandler('help', help_command))
     application.add_handler(CommandHandler('set', set_timer))
     application.add_handler(CommandHandler('unset', unset))
-    application.add_handler(CallbackQueryHandler(I.host_select_initial, '-'))
+    application.add_handler(CallbackQueryHandler(I.host_select, '-'))
+    application.add_handler(CallbackQueryHandler(I.host_answer, '[0-4]'))
+    application.add_handler(CallbackQueryHandler(I.game_over_correct, '\+'))
+    application.add_handler(CallbackQueryHandler(I.vote, '!'))
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS, I.update_question))
+    application.add_handler(MessageHandler(~filters.ChatType.GROUPS, I.not_in_group_chat_alart))
 
     # Run the bot until the user presses Ctrl-C
     application.run_polling()
