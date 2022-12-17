@@ -22,11 +22,19 @@ async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if context.chat_data['game']['state'] != -1:
             await update.message.reply_text('群聊中已有游戏在进行。')
             return
-    return_message = await update.effective_message.reply_text('开始新游戏，请使用 /join 命令加入游戏。')
+
+    try:
+        time = float(context.args[0])
+        assert time > 0
+    except:
+        time = 15.0
+
     context.chat_data['game'] = dict()
+    context.chat_data['game']['time'] = time
     context.chat_data['game']['state'] = 0
-    context.chat_data['game']['id'] = return_message.id
     context.chat_data['game']['players'] = dict()
+    return_message = await update.effective_message.reply_text(f'开始新游戏，请使用 /join 命令加入游戏。\n本局游戏时长 {time:.1f} 分钟。')
+    context.chat_data['game']['id'] = return_message.id
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if 'user' not in context.user_data:
@@ -71,14 +79,13 @@ async def startgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         n = len(players)
         logger.info(players)
         logger.info(n)
-        if n < 3 and False:
+        if n < 4:
             await update.message.reply_text('人数不足。')
         else:
             host = random.choice(players)
             game['host'] = host
             await update.message.reply_html(f'ゲームを始めよう！\n本局游戏的村长是：{game["players"][host]["user"].mention_html()}\n请从私聊中查看自己的身份。', quote=False)
-            # TODO
-            if n < 3:
+            if n < 2:
                 roles = [1] * n
             elif n < 7:
                 roles = [1] * (n - 2) + [0] + [2]
@@ -102,7 +109,7 @@ async def startgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(game['players'][host]['user'].id, '请从下列词语中选择一个。', reply_markup=keyboard)
 
 option_str = ['是', '否', '?', '接近了', '差得远']
-option_emoji = ['✔️', '❌', '❔', '', '']
+option_emoji = ['✔️', '❌', '❔', '✔️', '❌']
 
 async def host_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -116,14 +123,29 @@ async def host_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if game['roles'][player] != 1:
                 await context.bot.send_message(user_dict['user'].id, f'本局游戏的词语是：{game["word"]}。')
 
-        game['history'] = await context.bot.send_message(game['chat'], f'这条消息中是本局游戏中的所有问答。')
+        # set up timer
+        time = game['time'] * 60
+        game_id = game['id']
+        chat_id = game['chat']
+        context.job_queue.run_once(time_up, time, chat_id=chat_id, name=str(chat_id), data=game_id)
+        t = 1
+        while t * 60 <= time:
+            context.job_queue.run_once(alarm, time - t * 60, chat_id=chat_id, name=str(chat_id), data=(t, game_id))
+            if t < 2:
+                t += 1
+            elif t < 10:
+                t += 2
+            else:
+                t += 5
+
         game['n_messages'] = 0
+        game['history'] = await context.bot.send_message(game['chat'], f'这条消息中是本局游戏中的所有问答。')
         players = list(game['players'].keys())
         players.remove(game['host'])
         random.shuffle(players)
         game['queue'] = players
         game['index'] = 0
-        game['count'] = [40] * 2 + [15, 1, 1]
+        game['count'] = [40] * 2 + [10, 1, 1]
         await new_question(context.bot, game)
 
     await query.answer()
@@ -215,6 +237,7 @@ async def game_over_correct(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     game['voting'] = dict()
 
     game['vote_message'] = await context.bot.send_message(game['chat'], f'游戏中的狼人是 {wolves}，请你们在 1 分钟内找出先知，只需有一人指出先知即可。', reply_markup=keyboard, parse_mode=ParseMode.HTML)
+    context.job_queue.run_once(finish_vote, 60, chat_id=game['chat'], name=str(game['chat']), data=game['id'])
 
 async def game_over_incorrect_force(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -225,9 +248,14 @@ async def game_over_incorrect_force(update: Update, context: ContextTypes.DEFAUL
     except:
         logger.info('excepted')
     if 'game' in context.chat_data and context.chat_data['game']['state'] == 2:
-        await game_over_incorrect(context.bot, context.chat_data['game'])
+        game = context.chat_data['game']
     elif 'game' in context.user_data and context.user_data['game']['state'] == 2:
-        await game_over_incorrect(context.bot, context.user_data['game'])
+        game = context.user_data['game']
+    else:
+        game = None
+    if game != None:
+        await game_over_incorrect(context.bot, game)
+        context.job_queue.run_once(finish_vote, 60, chat_id=game['chat'], name=str(game['chat']), data=game['id'])
 
 async def game_over_incorrect(bot: ExtBot, game: dict) -> None:
     logger.info('incorrect')
@@ -254,10 +282,10 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     game['voting'][update.effective_user.id] = int(query.data[1:])
 
-async def finish_vote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def finish_vote(context: ContextTypes.DEFAULT_TYPE) -> None:
     if 'game' not in context.chat_data or context.chat_data['game']['state'] < 3:
         return
-    game = context.user_data['game']
+    game = context.chat_data['game']
     c = game['candidates']
     v = list(game['voting'].values())
     results = [v.count(id) for id in c]
@@ -284,4 +312,23 @@ async def finish_vote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await context.bot.send_message(game['chat'], f'狼人是 {wolves}，村民成功找到了狼人。\n村民获胜！', parse_mode=ParseMode.HTML)
             else:
                 await context.bot.send_message(game['chat'], f'{game["players"][id]["user"].mention_html()} 不是狼人。\n狼人是 {wolves}。\n狼人获胜！', parse_mode=ParseMode.HTML)
+            for i, r in game['roles'].items():
+                if r == 2:
+                    idd = i
+            await context.bot.send_message(game['chat'], f'本局游戏的先知是 {game["players"][id]["user"].mention_html()}。', parse_mode=ParseMode.HTML)
     game['state'] = -1
+
+async def alarm(context: ContextTypes.DEFAULT_TYPE) -> None:
+    job = context.job
+    t, id = job.data
+    if 'game' in context.chat_data and context.chat_data['game']['state'] == 2 and id == context.chat_data['game']['id']:
+        await context.bot.send_message(job.chat_id, text=f'时间还剩 {t} 分钟。')
+
+async def time_up(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if 'game' in context.chat_data and context.chat_data['game']['state'] == 2 and context.job.data == context.chat_data['game']['id']:
+        game = context.chat_data['game']
+        await game_over_incorrect(context.bot, game)
+        context.job_queue.run_once(finish_vote, 60, chat_id=game['chat'], name=str(game['chat']), data=game['id'])
+
+async def finish_vote_force(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await finish_vote(context)
